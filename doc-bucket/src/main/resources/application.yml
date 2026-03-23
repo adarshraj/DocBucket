@@ -1,0 +1,88 @@
+quarkus:
+  application:
+    name: doc-bucket
+  datasource:
+    db-kind: postgresql
+    username: docbucket
+    password: docbucket
+  flyway:
+    migrate-at-start: true
+  http:
+    port: 8080
+    cors:
+      enabled: true
+      origins: "*"
+      methods: GET,POST,DELETE,OPTIONS,HEAD,PUT,PATCH
+      headers: accept,authorization,content-type,x-api-key,x-tenant-id,x-app-id,x-admin-key,x-owner-user-id
+      access-control-max-age: 24H
+  otel:
+    enabled: true
+
+doc:
+  bucket:
+    admin-key: ${DOC_BUCKET_ADMIN_KEY:}
+    # HMAC-SHA256 server secret for hashing API keys. Min 32 chars.
+    # MUST be overridden in production via DOC_BUCKET_KEY_HMAC_SECRET.
+    # Changing this value invalidates all existing registered client keys.
+    key-hmac-secret: ${DOC_BUCKET_KEY_HMAC_SECRET:dev-only-insecure-hmac-secret-change-in-prod}
+    upload:
+      max-bytes: ${DOC_BUCKET_MAX_UPLOAD_BYTES:104857600}          # 100 MB default
+      # Optional MIME allowlist (comma-separated). Env: DOC_BUCKET_UPLOAD_MIME_ALLOWLIST
+    rate-limit:
+      enabled: ${DOC_BUCKET_RATE_LIMIT_ENABLED:true}
+      requests-per-minute: ${DOC_BUCKET_RATE_LIMIT_RPM:200}
+    purge:
+      enabled: ${DOC_BUCKET_PURGE_ENABLED:true}
+      retention-days: ${DOC_BUCKET_PURGE_RETENTION_DAYS:30}
+    presign:
+      min-ttl-seconds: ${DOC_BUCKET_PRESIGN_MIN_TTL:60}
+      max-ttl-seconds: ${DOC_BUCKET_PRESIGN_MAX_TTL:604800}
+  storage:
+    endpoint: ${S3_ENDPOINT:http://127.0.0.1:3900}
+    region: ${S3_REGION:garage}
+    # Garage/MinIO/R2 keys — NOT Amazon-specific; AWS_* names are SDK defaults, see README.
+    access-key-id: ${DOC_STORAGE_ACCESS_KEY_ID:${AWS_ACCESS_KEY_ID:}}
+    secret-access-key: ${DOC_STORAGE_SECRET_ACCESS_KEY:${AWS_SECRET_ACCESS_KEY:}}
+    path-style-access: ${S3_PATH_STYLE:true}
+    default-bucket: ${DOC_BUCKET_BUCKET:documents}
+
+"%dev":
+  quarkus:
+    datasource:
+      devservices:
+        enabled: true
+
+"%test":
+  quarkus:
+    datasource:
+      devservices:
+        enabled: true
+    log:
+      level: INFO
+    otel:
+      enabled: false
+  doc:
+    bucket:
+      key-hmac-secret: "test-hmac-secret-exactly-32-chars!!"
+      admin-key: test-admin-plaintext
+      upload:
+        max-bytes: 104857600
+        mime-allowlist: application/octet-stream
+      rate-limit:
+        enabled: false
+      purge:
+        enabled: false
+    storage:
+      endpoint: http://127.0.0.1:3900
+      region: garage
+      access-key-id: test
+      secret-access-key: test
+      path-style-access: true
+
+"%prod":
+  quarkus:
+    datasource:
+      jdbc:
+        url: ${QUARKUS_DATASOURCE_JDBC_URL}
+      username: ${QUARKUS_DATASOURCE_USERNAME:docbucket}
+      password: ${QUARKUS_DATASOURCE_PASSWORD}
