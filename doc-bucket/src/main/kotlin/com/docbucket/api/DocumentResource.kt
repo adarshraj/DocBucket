@@ -3,10 +3,13 @@ package com.docbucket.api
 import com.docbucket.api.dto.DocumentResponse
 import com.docbucket.api.dto.PagedResponse
 import com.docbucket.api.dto.PresignResponse
+import com.docbucket.api.dto.ShareRequest
+import com.docbucket.api.dto.ShareResponse
 import com.docbucket.security.RequestAuth
 import com.docbucket.security.CallerContext
 import com.docbucket.service.DocumentService
 import jakarta.inject.Inject
+import jakarta.validation.Valid
 import jakarta.validation.constraints.Max
 import jakarta.validation.constraints.Min
 import jakarta.validation.constraints.Size
@@ -34,7 +37,7 @@ import java.util.UUID
 
 @Path("/api/documents")
 @Produces(MediaType.APPLICATION_JSON)
-@Tag(name = "documents", description = "Document metadata in PostgreSQL; bytes via S3-compatible API (config-driven)")
+@Tag(name = "documents", description = "Document storage — metadata in DB, bytes via S3-compatible storage")
 class DocumentResource @Inject constructor(
     private val documentService: DocumentService,
 ) {
@@ -42,7 +45,7 @@ class DocumentResource @Inject constructor(
     @POST
     @Path("/upload")
     @Consumes(MediaType.WILDCARD)
-    @Operation(summary = "Upload raw bytes; stores via S3 API and metadata in PostgreSQL")
+    @Operation(summary = "Upload raw bytes; stores bytes via S3 API and persists metadata to the database")
     fun upload(
         @HeaderParam("X-Tenant-Id") @Size(max = 64) tenantIdHeader: String?,
         @HeaderParam("X-App-Id") @Size(max = 64) appIdHeader: String?,
@@ -150,6 +153,41 @@ class DocumentResource @Inject constructor(
             documentService.softDelete(id, callerContext(requestContext))
         }
         return Response.noContent().build()
+    }
+
+    @POST
+    @Path("/{id}/shares")
+    @Consumes(MediaType.APPLICATION_JSON)
+    @Operation(summary = "Grant another app access to this document (owner only)")
+    fun share(
+        @PathParam("id") id: UUID,
+        @Valid body: ShareRequest,
+        @Context requestContext: ContainerRequestContext,
+    ): ShareResponse {
+        return documentService.shareDocument(id, callerContext(requestContext), body.granteeTenantId, body.granteeAppId)
+    }
+
+    @DELETE
+    @Path("/{id}/shares/{granteeTenantId}/{granteeAppId}")
+    @Operation(summary = "Revoke a previously granted share (owner only)")
+    fun revokeShare(
+        @PathParam("id") id: UUID,
+        @PathParam("granteeTenantId") granteeTenantId: String,
+        @PathParam("granteeAppId") granteeAppId: String,
+        @Context requestContext: ContainerRequestContext,
+    ): Response {
+        documentService.revokeShare(id, callerContext(requestContext), granteeTenantId, granteeAppId)
+        return Response.noContent().build()
+    }
+
+    @GET
+    @Path("/{id}/shares")
+    @Operation(summary = "List all apps that have been granted access to this document (owner only)")
+    fun listShares(
+        @PathParam("id") id: UUID,
+        @Context requestContext: ContainerRequestContext,
+    ): List<ShareResponse> {
+        return documentService.listShares(id, callerContext(requestContext))
     }
 
     private fun contentDispositionAttachment(filename: String): String {

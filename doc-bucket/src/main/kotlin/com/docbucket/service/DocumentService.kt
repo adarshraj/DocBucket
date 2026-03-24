@@ -3,10 +3,13 @@ package com.docbucket.service
 import com.docbucket.api.dto.DocumentResponse
 import com.docbucket.api.dto.PagedResponse
 import com.docbucket.api.dto.PresignResponse
+import com.docbucket.api.dto.ShareResponse
 import com.docbucket.config.PresignConfig
 import com.docbucket.config.UploadConfig
 import com.docbucket.domain.DocumentEntity
 import com.docbucket.domain.DocumentRepository
+import com.docbucket.domain.DocumentShare
+import com.docbucket.domain.DocumentShareRepository
 import com.docbucket.security.CallerContext
 import com.docbucket.security.TenantAppPathValidator
 import com.docbucket.storage.ObjectStorage
@@ -32,6 +35,7 @@ class DocumentService @Inject constructor(
     private val uploadConfig: UploadConfig,
     private val presignConfig: PresignConfig,
     private val documentRepository: DocumentRepository,
+    private val shareRepository: DocumentShareRepository,
     private val meterRegistry: MeterRegistry,
 ) {
     companion object {
@@ -171,6 +175,7 @@ class DocumentService @Inject constructor(
             // Object may already be gone if previously soft-deleted; log and continue with DB removal
             log.debugf("S3 delete on hard delete id=%s (object may already be gone): %s", id, e.message)
         }
+        shareRepository.revokeAll(id)
         documentRepository.delete(entity)
         log.infof("Document hard-deleted id=%s tenant=%s app=%s", id, entity.tenantId, entity.appId)
         meterRegistry.counter("docbucket.documents.hard_deleted").increment()
@@ -213,9 +218,11 @@ class DocumentService @Inject constructor(
     }
 
     private fun requireActive(id: UUID, caller: CallerContext?): DocumentEntity {
-        val entity = documentRepository.findById(id) ?: throw NotFoundException("document not found")
-        if (entity.deletedAt != null) throw NotFoundException("document not found")
-        assertCaller(entity, caller)
+        val entity = if (caller != null) {
+            documentRepository.findByIdForCaller(id, caller.tenantId, caller.appId)
+        } else {
+            documentRepository.findById(id)?.takeIf { it.deletedAt == null }
+        } ?: throw NotFoundException("document not found")
         return entity
     }
 
@@ -225,6 +232,42 @@ class DocumentService @Inject constructor(
             throw NotFoundException("document not found")
         }
     }
+
+    @Transactional
+    fun shareDocument(id: UUID, caller: CallerContext?, granteeTenantId: String, granteeAppId: String): ShareResponse {
+        val entity = documentRepository.findById(id) ?: throw NotFoundException("document not found")
+        assertCaller(entity, caller)
+        if (entity.deletedAt != null) throw NotFoundException("document not found")
+        if (granteeTenantId == entity.tenantId && granteeAppId == entity.appId) {
+            throw BadRequestException("cannot share a document with its own owner")
+        }
+        val share = shareRepository.grant(id, granteeTenantId, granteeAppId)
+        log.infof("Document shared id=%s with tenant=%s app=%s", id, granteeTenantId, granteeAppId)
+        return toShareResponse(id, share)
+    }
+
+    @Transactional
+    fun revokeShare(id: UUID, caller: CallerContext?, granteeTenantId: String, granteeAppId: String) {
+        val entity = documentRepository.findById(id) ?: throw NotFoundException("document not found")
+        assertCaller(entity, caller)
+        val removed = shareRepository.revoke(id, granteeTenantId, granteeAppId)
+        if (!removed) throw NotFoundException("share not found")
+        log.infof("Share revoked id=%s grantee tenant=%s app=%s", id, granteeTenantId, granteeAppId)
+    }
+
+    @Transactional
+    fun listShares(id: UUID, caller: CallerContext?): List<ShareResponse> {
+        val entity = documentRepository.findById(id) ?: throw NotFoundException("document not found")
+        assertCaller(entity, caller)
+        return shareRepository.listForDocument(id).map { toShareResponse(id, it) }
+    }
+
+    private fun toShareResponse(documentId: UUID, share: DocumentShare) = ShareResponse(
+        documentId = documentId,
+        granteeTenantId = share.id.granteeTenantId,
+        granteeAppId = share.id.granteeAppId,
+        grantedAt = share.grantedAt,
+    )
 
     private fun toResponse(entity: DocumentEntity): DocumentResponse {
         return DocumentResponse(

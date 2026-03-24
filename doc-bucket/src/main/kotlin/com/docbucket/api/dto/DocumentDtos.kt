@@ -1,5 +1,7 @@
 package com.docbucket.api.dto
 
+import jakarta.validation.constraints.NotBlank
+import jakarta.validation.constraints.Size
 import java.time.Instant
 import java.util.UUID
 
@@ -29,4 +31,16 @@ data class PagedResponse<T>(
     val page: Int,
     val size: Int,
     val hasNext: Boolean,
+)
+
+data class ShareRequest(
+    @field:NotBlank @field:Size(max = 64) val granteeTenantId: String,
+    @field:NotBlank @field:Size(max = 64) val granteeAppId: String,
+)
+
+data class ShareResponse(
+    val documentId: UUID,
+    val granteeTenantId: String,
+    val granteeAppId: String,
+    val grantedAt: Instant,
 )

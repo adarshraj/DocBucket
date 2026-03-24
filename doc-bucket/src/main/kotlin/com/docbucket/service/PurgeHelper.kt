@@ -1,6 +1,7 @@
 package com.docbucket.service
 
 import com.docbucket.domain.DocumentRepository
+import com.docbucket.domain.DocumentShareRepository
 import jakarta.enterprise.context.ApplicationScoped
 import jakarta.inject.Inject
 import jakarta.transaction.Transactional
@@ -18,6 +19,7 @@ import java.util.UUID
 @ApplicationScoped
 class PurgeHelper @Inject constructor(
     private val documentRepository: DocumentRepository,
+    private val shareRepository: DocumentShareRepository,
 ) {
     data class PurgeBatchItem(val id: UUID, val bucket: String, val objectKey: String)
 
@@ -29,6 +31,9 @@ class PurgeHelper @Inject constructor(
 
     @Transactional
     fun deleteByIds(ids: List<UUID>) {
-        ids.forEach { documentRepository.deleteById(it) }
+        ids.forEach {
+            shareRepository.revokeAll(it)
+            documentRepository.deleteById(it)
+        }
     }
 }
