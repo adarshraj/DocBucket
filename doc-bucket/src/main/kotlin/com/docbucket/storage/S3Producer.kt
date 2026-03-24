@@ -16,36 +16,32 @@ class S3Producer(private val config: StorageConfig) {
 
     @Produces
     @Singleton
-    fun s3Client(): S3Client {
-        val creds = StaticCredentialsProvider.create(
-            AwsBasicCredentials.create(config.accessKeyId(), config.secretAccessKey()),
-        )
-        val s3Conf = S3Configuration.builder()
-            .pathStyleAccessEnabled(config.pathStyleAccess())
-            .build()
-        return S3Client.builder()
+    fun s3Client(): S3Client =
+        S3Client.builder()
             .endpointOverride(config.endpoint())
             .region(Region.of(config.region()))
-            .credentialsProvider(creds)
-            .serviceConfiguration(s3Conf)
+            .credentialsProvider(credentialsProvider())
+            .serviceConfiguration(s3Configuration())
             .httpClientBuilder(UrlConnectionHttpClient.builder())
             .build()
-    }
 
     @Produces
     @Singleton
-    fun s3Presigner(): S3Presigner {
-        val creds = StaticCredentialsProvider.create(
-            AwsBasicCredentials.create(config.accessKeyId(), config.secretAccessKey()),
-        )
-        val s3Conf = S3Configuration.builder()
-            .pathStyleAccessEnabled(config.pathStyleAccess())
-            .build()
-        return S3Presigner.builder()
+    fun s3Presigner(): S3Presigner =
+        S3Presigner.builder()
             .endpointOverride(config.endpoint())
             .region(Region.of(config.region()))
-            .credentialsProvider(creds)
-            .serviceConfiguration(s3Conf)
+            .credentialsProvider(credentialsProvider())
+            .serviceConfiguration(s3Configuration())
             .build()
-    }
+
+    private fun credentialsProvider(): StaticCredentialsProvider =
+        StaticCredentialsProvider.create(
+            AwsBasicCredentials.create(config.accessKeyId(), config.secretAccessKey()),
+        )
+
+    private fun s3Configuration(): S3Configuration =
+        S3Configuration.builder()
+            .pathStyleAccessEnabled(config.pathStyleAccess())
+            .build()
 }

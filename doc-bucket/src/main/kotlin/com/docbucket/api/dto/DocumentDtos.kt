@@ -8,8 +8,6 @@ data class DocumentResponse(
     val tenantId: String,
     val appId: String,
     val ownerUserId: String?,
-    val bucket: String,
-    val objectKey: String,
     /** Original filename from the upload request, when provided. */
     val originalFilename: String?,
     val contentType: String?,

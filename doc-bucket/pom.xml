@@ -62,6 +62,21 @@
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-kotlin</artifactId>
         </dependency>
+        <!-- Both drivers are bundled so switching databases is a config-only change.
+             Active database is controlled by quarkus.datasource.db-kind in application.yml.
+             SQLite: db-kind=other + explicit driver/dialect (no first-party Quarkus extension exists).
+             PostgreSQL: db-kind=postgresql (first-party extension, used in %prod profile). -->
+        <dependency>
+            <groupId>org.xerial</groupId>
+            <artifactId>sqlite-jdbc</artifactId>
+            <version>3.51.3.0</version>
+        </dependency>
+        <dependency>
+            <!-- Provides org.hibernate.community.dialect.SQLiteDialect.
+                 Version is managed by the Quarkus BOM through Hibernate ORM. -->
+            <groupId>org.hibernate.orm</groupId>
+            <artifactId>hibernate-community-dialects</artifactId>
+        </dependency>
         <dependency>
             <groupId>io.quarkus</groupId>
             <artifactId>quarkus-jdbc-postgresql</artifactId>

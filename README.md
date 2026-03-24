@@ -1,5 +1,5 @@
 # DocBucket
 
-Personal document storage architecture: a **Kotlin + Quarkus BFF** (`doc-bff`) fronts any **S3-compatible** object store (default target: **Garage**) and **PostgreSQL** for metadata.
+Personal document storage service: a **Kotlin + Quarkus** backend that stores document bytes in any **S3-compatible** object store (Garage, MinIO, R2, AWS S3) and metadata in **PostgreSQL**.
 
-See [doc-bff/README.md](doc-bff/README.md) for API, configuration, and operational notes.
+See [doc-bucket/README.md](doc-bucket/README.md) for the full feature guide, API reference, and configuration.

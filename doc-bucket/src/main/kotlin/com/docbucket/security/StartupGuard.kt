@@ -16,6 +16,7 @@ class StartupGuard @Inject constructor(
     @ConfigProperty(name = "doc.bucket.key-hmac-secret") private val hmacSecret: String,
     @ConfigProperty(name = "doc.bucket.admin-key") private val adminKey: Optional<String>,
     private val clientRepository: ApiClientRepository,
+    private val clientRegistryCache: ClientRegistryCache,
 ) {
     companion object {
         private val log: Logger = Logger.getLogger(StartupGuard::class.java)
@@ -27,7 +28,9 @@ class StartupGuard @Inject constructor(
     fun onStart(@Observes ev: StartupEvent) {
         validateHmacSecret()
         checkAdminKey()
-        checkOpenMode()
+        val count = clientRepository.countAll()
+        clientRegistryCache.refresh(count)
+        checkOpenMode(count)
     }
 
     private fun validateHmacSecret() {
@@ -48,8 +51,8 @@ class StartupGuard @Inject constructor(
         }
     }
 
-    private fun checkOpenMode() {
-        if (clientRepository.countAll() == 0L) {
+    private fun checkOpenMode(count: Long) {
+        if (count == 0L) {
             val msg = "SECURITY: No API clients registered — all /api/documents/* endpoints are unprotected (dev-open mode). Register a client via POST /api/clients."
             if (isProd()) log.error(msg) else log.warn(msg)
         }

@@ -46,11 +46,21 @@ class DocumentService @Inject constructor(
         ownerUserId: String?,
         filename: String?,
         contentType: String?,
+        contentLengthHint: Long?,
         input: InputStream,
     ): DocumentResponse {
         TenantAppPathValidator.validatePair(tenantId, appId)
-        val ct = contentType ?: "application/octet-stream"
+        // Normalise to base MIME type (strip charset and other parameters) so that the stored
+        // value is consistent and the listDocuments contentType filter works with exact equality.
+        val ct = (contentType ?: "application/octet-stream").substringBefore(";").trim()
         validateContentType(ct)
+
+        val maxBytes = uploadConfig.maxBytes()
+        if (contentLengthHint != null && contentLengthHint > maxBytes) {
+            log.warnf("Upload rejected for tenant=%s app=%s: Content-Length %d exceeds limit %d", tenantId, appId, contentLengthHint, maxBytes)
+            meterRegistry.counter("docbucket.upload.rejected", "reason", "size_exceeded").increment()
+            throw BadRequestException("Upload size $contentLengthHint bytes exceeds maximum allowed $maxBytes bytes")
+        }
 
         val id = UUID.randomUUID()
         val bucket = storageConfig.defaultBucket()
@@ -63,7 +73,6 @@ class DocumentService @Inject constructor(
             Files.copy(input, tmp, StandardCopyOption.REPLACE_EXISTING)
             val size = Files.size(tmp)
 
-            val maxBytes = uploadConfig.maxBytes()
             if (size > maxBytes) {
                 log.warnf("Upload rejected for tenant=%s app=%s: size %d exceeds limit %d", tenantId, appId, size, maxBytes)
                 meterRegistry.counter("docbucket.upload.rejected", "reason", "size_exceeded").increment()
@@ -96,12 +105,14 @@ class DocumentService @Inject constructor(
         }
     }
 
+    @Transactional
     fun getMetadata(id: UUID, caller: CallerContext?): DocumentResponse {
         val entity = requireActive(id, caller)
         log.debugf("Metadata fetched id=%s tenant=%s app=%s", id, entity.tenantId, entity.appId)
         return toResponse(entity)
     }
 
+    @Transactional
     fun openContentStream(id: UUID, caller: CallerContext?): DocumentContentStream {
         val entity = requireActive(id, caller)
         log.debugf("Content stream opened id=%s bucket=%s key=%s", id, entity.bucket, entity.objectKey)
@@ -117,6 +128,7 @@ class DocumentService @Inject constructor(
         )
     }
 
+    @Transactional
     fun presignDownload(id: UUID, ttlSeconds: Long, caller: CallerContext?): PresignResponse {
         val entity = requireActive(id, caller)
         val minT = presignConfig.minTtlSeconds()
@@ -135,10 +147,10 @@ class DocumentService @Inject constructor(
     @Transactional
     fun softDelete(id: UUID, caller: CallerContext?) {
         val entity = documentRepository.findById(id) ?: throw NotFoundException("document not found")
+        assertCaller(entity, caller)
         if (entity.deletedAt != null) {
             return
         }
-        assertCaller(entity, caller)
         entity.deletedAt = Instant.now()
         log.infof("Document soft-deleted id=%s tenant=%s app=%s", id, entity.tenantId, entity.appId)
         try {
@@ -153,24 +165,18 @@ class DocumentService @Inject constructor(
     fun hardDelete(id: UUID, caller: CallerContext?) {
         val entity = documentRepository.findById(id) ?: throw NotFoundException("document not found")
         assertCaller(entity, caller)
-        if (entity.deletedAt == null) {
-            try {
-                objectStorage.deleteObject(entity.bucket, entity.objectKey)
-            } catch (e: Exception) {
-                log.warnf(e, "S3 delete failed during hard delete id=%s — continuing with DB removal", id)
-            }
-        } else {
-            try {
-                objectStorage.deleteObject(entity.bucket, entity.objectKey)
-            } catch (e: Exception) {
-                log.debugf("S3 delete on hard purge id=%s (object may already be gone): %s", id, e.message)
-            }
+        try {
+            objectStorage.deleteObject(entity.bucket, entity.objectKey)
+        } catch (e: Exception) {
+            // Object may already be gone if previously soft-deleted; log and continue with DB removal
+            log.debugf("S3 delete on hard delete id=%s (object may already be gone): %s", id, e.message)
         }
         documentRepository.delete(entity)
         log.infof("Document hard-deleted id=%s tenant=%s app=%s", id, entity.tenantId, entity.appId)
         meterRegistry.counter("docbucket.documents.hard_deleted").increment()
     }
 
+    @Transactional
     fun listDocuments(
         tenantId: String,
         appId: String,
@@ -226,8 +232,6 @@ class DocumentService @Inject constructor(
             tenantId = entity.tenantId,
             appId = entity.appId,
             ownerUserId = entity.ownerUserId,
-            bucket = entity.bucket,
-            objectKey = entity.objectKey,
             originalFilename = entity.originalFilename,
             contentType = entity.contentType,
             sizeBytes = entity.sizeBytes,

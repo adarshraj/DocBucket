@@ -2,13 +2,22 @@ quarkus:
   application:
     name: doc-bucket
   datasource:
-    db-kind: postgresql
-    username: docbucket
-    password: docbucket
+    # Default database: SQLite (embedded, zero operational overhead, no separate process).
+    # To switch to PostgreSQL: set QUARKUS_DATASOURCE_DB_KIND=postgresql,
+    # QUARKUS_DATASOURCE_JDBC_URL, QUARKUS_DATASOURCE_USERNAME, QUARKUS_DATASOURCE_PASSWORD.
+    # No rebuild required — both drivers are already on the classpath.
+    db-kind: other
+    jdbc:
+      driver: org.sqlite.JDBC
+      url: ${QUARKUS_DATASOURCE_JDBC_URL:jdbc:sqlite:${DOCBUCKET_DB_FILE:./docbucket.db}}
+  hibernate-orm:
+    dialect: org.hibernate.community.dialect.SQLiteDialect
   flyway:
     migrate-at-start: true
   http:
     port: 8080
+    limits:
+      max-body-size: ${DOC_BUCKET_MAX_UPLOAD_BYTES:104857600}  # mirrors doc.bucket.upload.max-bytes
     cors:
       enabled: true
       origins: "*"
@@ -49,14 +58,16 @@ doc:
 "%dev":
   quarkus:
     datasource:
-      devservices:
-        enabled: true
+      # SQLite file in current directory during development — no Docker required.
+      jdbc:
+        url: ${QUARKUS_DATASOURCE_JDBC_URL:jdbc:sqlite:${DOCBUCKET_DB_FILE:./docbucket-dev.db}}
 
 "%test":
   quarkus:
     datasource:
-      devservices:
-        enabled: true
+      # In-memory SQLite with shared cache so all connections in the test JVM see the same DB.
+      jdbc:
+        url: jdbc:sqlite:file:docbucket-test?mode=memory&cache=shared
     log:
       level: INFO
     otel:
@@ -82,7 +93,15 @@ doc:
 "%prod":
   quarkus:
     datasource:
+      # Switch to PostgreSQL in production.
+      # All other profiles use SQLite — no code or build changes needed to switch back.
+      db-kind: postgresql
       jdbc:
+        driver: org.postgresql.Driver
         url: ${QUARKUS_DATASOURCE_JDBC_URL}
       username: ${QUARKUS_DATASOURCE_USERNAME:docbucket}
       password: ${QUARKUS_DATASOURCE_PASSWORD}
+    hibernate-orm:
+      # PostgreSQL dialect is auto-detected by Quarkus when db-kind=postgresql;
+      # explicitly clear the SQLite dialect set in the default profile.
+      dialect: org.hibernate.dialect.PostgreSQLDialect

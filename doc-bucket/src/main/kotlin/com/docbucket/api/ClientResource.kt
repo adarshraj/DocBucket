@@ -5,6 +5,7 @@ import com.docbucket.api.dto.RegisterClientRequest
 import com.docbucket.domain.ApiClient
 import com.docbucket.domain.ApiClientRepository
 import com.docbucket.security.ApiKeyHasher
+import com.docbucket.security.ClientRegistryCache
 import com.docbucket.security.TenantAppPathValidator
 import jakarta.inject.Inject
 import jakarta.transaction.Transactional
@@ -38,6 +39,7 @@ import java.util.UUID
 class ClientResource @Inject constructor(
     private val clientRepository: ApiClientRepository,
     private val hasher: ApiKeyHasher,
+    private val clientRegistryCache: ClientRegistryCache,
     @ConfigProperty(name = "doc.bucket.admin-key") private val adminKey: Optional<String>,
 ) {
     companion object {
@@ -69,6 +71,7 @@ class ClientResource @Inject constructor(
             createdAt = Instant.now()
         }
         clientRepository.persist(client)
+        clientRegistryCache.markHasClients()
         log.infof("Registered API client tenant=%s app=%s id=%s expires=%s", body.tenantId, body.appId, client.id, client.expiresAt)
 
         return Response.status(Response.Status.CREATED).entity(toResponse(client, rawKey)).build()
@@ -110,6 +113,7 @@ class ClientResource @Inject constructor(
         checkAdmin(providedKey)
         val client = clientRepository.findById(id) ?: throw NotFoundException("client not found")
         clientRepository.delete(client)
+        clientRegistryCache.refresh(clientRepository.countAll())
         log.infof("Revoked API client tenant=%s app=%s id=%s", client.tenantId, client.appId, id)
         return Response.noContent().build()
     }

@@ -82,7 +82,6 @@ class DocumentResourceTest {
         .`when`().post("/api/documents/upload")
         .then()
             .statusCode(200)
-            .body("objectKey", containsString("my_report.pdf"))
             .body("originalFilename", equalTo("my report.pdf"))
     }
 

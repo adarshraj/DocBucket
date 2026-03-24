@@ -18,7 +18,7 @@ class DocumentRepository : PanacheRepositoryBase<DocumentEntity, UUID> {
         size: Int,
     ): List<DocumentEntity> {
         val (ql, params) = activeFilterQuery(tenantId, appId, ownerUserId, contentType, createdAfter)
-        return find("$ql ORDER BY createdAt DESC", *params.toTypedArray())
+        return find("$ql ORDER BY createdAt DESC", params)
             .page(page, size)
             .list()
     }
@@ -31,11 +31,13 @@ class DocumentRepository : PanacheRepositoryBase<DocumentEntity, UUID> {
         createdAfter: Instant?,
     ): Long {
         val (ql, params) = activeFilterQuery(tenantId, appId, ownerUserId, contentType, createdAfter)
-        return count(ql, *params.toTypedArray())
+        return count(ql, params)
     }
 
-    fun findDeletedBefore(cutoff: Instant): List<DocumentEntity> =
-        find("deletedAt IS NOT NULL AND deletedAt < ?1", cutoff).list()
+    fun findDeletedBefore(cutoff: Instant, batchSize: Int = 500): List<DocumentEntity> =
+        find("deletedAt IS NOT NULL AND deletedAt < ?1", cutoff)
+            .page(0, batchSize)
+            .list()
 
     private fun activeFilterQuery(
         tenantId: String,
@@ -43,24 +45,20 @@ class DocumentRepository : PanacheRepositoryBase<DocumentEntity, UUID> {
         ownerUserId: String?,
         contentType: String?,
         createdAfter: Instant?,
-    ): Pair<String, List<Any>> {
-        val params = mutableListOf<Any>(tenantId, appId)
-        var ql = "tenantId = ?1 AND appId = ?2 AND deletedAt IS NULL"
-        var i = 3
+    ): Pair<String, Map<String, Any>> {
+        val params = mutableMapOf<String, Any>("tenantId" to tenantId, "appId" to appId)
+        var ql = "tenantId = :tenantId AND appId = :appId AND deletedAt IS NULL"
         if (ownerUserId != null) {
-            ql += " AND ownerUserId = ?$i"
-            params.add(ownerUserId)
-            i++
+            ql += " AND ownerUserId = :ownerUserId"
+            params["ownerUserId"] = ownerUserId
         }
         if (contentType != null) {
-            ql += " AND contentType = ?$i"
-            params.add(contentType)
-            i++
+            ql += " AND contentType = :contentType"
+            params["contentType"] = contentType
         }
         if (createdAfter != null) {
-            ql += " AND createdAt >= ?$i"
-            params.add(createdAfter)
-            i++
+            ql += " AND createdAt >= :createdAfter"
+            params["createdAfter"] = createdAfter
         }
         return ql to params
     }

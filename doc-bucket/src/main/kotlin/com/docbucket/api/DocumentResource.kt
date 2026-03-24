@@ -41,20 +41,14 @@ class DocumentResource @Inject constructor(
 
     @POST
     @Path("/upload")
-    @Consumes(
-        MediaType.APPLICATION_OCTET_STREAM,
-        "image/png",
-        "image/jpeg",
-        "image/gif",
-        "application/pdf",
-        "text/plain",
-    )
+    @Consumes(MediaType.WILDCARD)
     @Operation(summary = "Upload raw bytes; stores via S3 API and metadata in PostgreSQL")
     fun upload(
         @HeaderParam("X-Tenant-Id") @Size(max = 64) tenantIdHeader: String?,
         @HeaderParam("X-App-Id") @Size(max = 64) appIdHeader: String?,
         @HeaderParam("X-Owner-User-Id") @Size(max = 256) ownerUserId: String?,
         @HeaderParam(HttpHeaders.CONTENT_TYPE) contentType: String?,
+        @HeaderParam(HttpHeaders.CONTENT_LENGTH) contentLength: Long?,
         @QueryParam("filename") filename: String?,
         @Context requestContext: ContainerRequestContext,
         input: InputStream,
@@ -69,7 +63,7 @@ class DocumentResource @Inject constructor(
                 ?: throw BadRequestException("X-App-Id required")
             t to a
         }
-        return documentService.upload(tenantId, appId, ownerUserId, filename, contentType, input)
+        return documentService.upload(tenantId, appId, ownerUserId, filename, contentType, contentLength, input)
     }
 
     @GET
@@ -159,10 +153,12 @@ class DocumentResource @Inject constructor(
     }
 
     private fun contentDispositionAttachment(filename: String): String {
+        // Strip characters that could break the header value: quotes, semicolons (field separator),
+        // backslashes, and all ASCII control characters.
         val safe = filename
-            .replace("\"", "")
-            .replace("\r", "")
-            .replace("\n", "")
+            .replace(Regex("""["\;\\\r\n]"""), "")
+            .replace(Regex("""[\x00-\x1f\x7f]"""), "")
+            .trim()
             .ifBlank { "download" }
         return "attachment; filename=\"$safe\""
     }

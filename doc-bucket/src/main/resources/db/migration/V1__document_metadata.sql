@@ -1,3 +1,5 @@
+-- TIMESTAMP is used instead of TIMESTAMPTZ so this migration runs on both SQLite and PostgreSQL
+-- without modification. Hibernate maps Instant to UTC in both cases regardless of column type.
 CREATE TABLE document_metadata (
     id UUID PRIMARY KEY,
     tenant_id VARCHAR(64) NOT NULL,
@@ -8,8 +10,8 @@ CREATE TABLE document_metadata (
     content_type VARCHAR(256),
     size_bytes BIGINT,
     etag VARCHAR(256),
-    deleted_at TIMESTAMPTZ,
-    created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+    deleted_at TIMESTAMP,
+    created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP
 );
 
 CREATE INDEX idx_document_tenant_app ON document_metadata (tenant_id, app_id);

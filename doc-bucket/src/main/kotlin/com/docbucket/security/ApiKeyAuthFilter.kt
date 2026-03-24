@@ -9,7 +9,6 @@ import jakarta.ws.rs.container.ContainerRequestFilter
 import jakarta.ws.rs.core.Response
 import jakarta.ws.rs.ext.Provider
 import org.jboss.logging.Logger
-import java.time.Instant
 
 /**
  * Per-app key auth (preferred): rows in `api_client`; each app has its own secret;
@@ -22,6 +21,7 @@ import java.time.Instant
 @Priority(Priorities.AUTHENTICATION)
 class ApiKeyAuthFilter @Inject constructor(
     private val clientRepository: ApiClientRepository,
+    private val clientRegistryCache: ClientRegistryCache,
     private val rateLimiter: RateLimiter,
     private val hasher: ApiKeyHasher,
 ) : ContainerRequestFilter {
@@ -39,14 +39,17 @@ class ApiKeyAuthFilter @Inject constructor(
         val isApi = path.startsWith("api/") || path.startsWith("/api/")
         if (!isApi) return
 
-        val registered = clientRepository.countAll() > 0
-        if (!registered) {
+        val header = requestContext.getHeaderString("X-API-Key")
+
+        // Enter dev-open mode only when the cache confirms no clients are registered AND the
+        // caller has not supplied an API key. If a key IS present, always validate it against
+        // the DB so that directly-inserted or just-registered clients are not silently ignored.
+        if (!clientRegistryCache.hasClients() && header.isNullOrBlank()) {
             log.debugf("Dev-open mode: path=%s", path)
             requestContext.setProperty(RequestAuth.PROP_MODE, "none")
             return
         }
 
-        val header = requestContext.getHeaderString("X-API-Key")
         if (header.isNullOrBlank()) {
             log.warnf("Missing X-API-Key for path=%s", path)
             abort(requestContext)
@@ -103,6 +106,7 @@ class ApiKeyAuthFilter @Inject constructor(
         requestContext.abortWith(
             Response.status(429)
                 .type(jakarta.ws.rs.core.MediaType.APPLICATION_JSON)
+                .header("Retry-After", "60")
                 .entity(
                     mapOf(
                         "error" to "too_many_requests",

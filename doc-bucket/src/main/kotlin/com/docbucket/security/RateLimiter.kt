@@ -1,7 +1,9 @@
 package com.docbucket.security
 
+import com.docbucket.config.RateLimitConfig
+import io.quarkus.scheduler.Scheduled
 import jakarta.enterprise.context.ApplicationScoped
-import org.eclipse.microprofile.config.inject.ConfigProperty
+import jakarta.inject.Inject
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -13,11 +15,8 @@ import java.util.concurrent.atomic.AtomicInteger
  * `requestsPerMinute × instanceCount`. Use Redis, a gateway (Traefik/Caddy), or an API mesh for shared quotas.
  */
 @ApplicationScoped
-class RateLimiter(
-    @ConfigProperty(name = "doc.bucket.rate-limit.enabled", defaultValue = "true")
-    private val enabled: Boolean,
-    @ConfigProperty(name = "doc.bucket.rate-limit.requests-per-minute", defaultValue = "200")
-    private val requestsPerMinute: Int,
+class RateLimiter @Inject constructor(
+    private val rateLimitConfig: RateLimitConfig,
 ) {
     private data class Window(val startMs: Long, val count: AtomicInteger)
 
@@ -28,7 +27,7 @@ class RateLimiter(
      * Returns `true` if the caller is within quota, `false` if they should be throttled.
      */
     fun tryAcquire(key: String): Boolean {
-        if (!enabled) return true
+        if (!rateLimitConfig.enabled()) return true
         val now = System.currentTimeMillis()
         val window = windows.compute(key) { _, existing ->
             if (existing == null || now - existing.startMs > windowMs) {
@@ -37,6 +36,16 @@ class RateLimiter(
                 existing
             }
         }!!
-        return window.count.incrementAndGet() <= requestsPerMinute
+        return window.count.incrementAndGet() <= rateLimitConfig.requestsPerMinute()
+    }
+
+    /**
+     * Removes stale window entries for keys that have been inactive for more than two window
+     * periods. Prevents unbounded growth of the map when API key hashes accumulate over time.
+     */
+    @Scheduled(every = "2m")
+    fun evictStaleWindows() {
+        val cutoff = System.currentTimeMillis() - windowMs * 2
+        windows.entries.removeIf { it.value.startMs < cutoff }
     }
 }
