@@ -1,7 +1,7 @@
 package com.docbucket.security
 
 /**
- * Request-scoped auth set by [ApiKeyAuthFilter] when a registered per-app key matches.
+ * Request-scoped auth set by [JwtBearerAuthFilter] after validating an ES256 JWT from auth-service.
  */
 object RequestAuth {
     const val PROP_TENANT = "bucket.auth.tenant"

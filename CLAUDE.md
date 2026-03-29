@@ -47,7 +47,7 @@ The application follows a layered architecture under `src/main/kotlin/com/docbuc
 - **`service/`** — Business logic (`DocumentService`). Handles upload validation, S3 interaction, metadata persistence, soft/hard delete, presigned URL generation, and streaming downloads. `SoftDeletePurgeJob` runs on a 24-hour schedule.
 - **`domain/`** — JPA entities (`DocumentEntity`, `ApiClient`) and Panache repositories. `DocumentRepository` handles all filtered/paginated queries.
 - **`storage/`** — `ObjectStorage` interface with `S3ObjectStorage` implementation. `S3Producer` is a CDI producer for `S3Client` and `S3Presigner`.
-- **`security/`** — `ApiKeyAuthFilter` is a JAX-RS `ContainerRequestFilter` at `AUTHENTICATION` priority. It resolves the caller's tenant/app either from a registered `api_client` DB row (preferred) or from raw headers in dev-open mode. `RateLimiter` applies fixed-window per-key quotas in memory. `ApiKeyHasher` uses HMAC-SHA256 (not bcrypt — rationale: 256-bit random keys don't need slow KDFs).
+- **`security/`** — `JwtBearerAuthFilter` is a JAX-RS `ContainerRequestFilter` at `AUTHENTICATION` priority. It validates ES256 Bearer JWTs issued by the auth-service by fetching EC public keys from its JWKS endpoint via `JwksCache`. `RateLimiter` applies fixed-window per-user quotas in memory. `ApiKeyHasher` is retained only for HMAC-based admin key verification in `ClientResource`. `ApiKeyAuthFilter` is disabled (retained for reference only).
 - **`config/`** — ConfigMapping interfaces for upload, purge, and presign settings.
 
 ### Key Data Flow
@@ -56,7 +56,7 @@ The application follows a layered architecture under `src/main/kotlin/com/docbuc
 
 **Download**: `DocumentResource` → `DocumentService` (load entity, `S3ObjectStorage.getObject`, return `DocumentContentStream` streamed via JAX-RS)
 
-**Auth**: Every `/api/*` request (except `/api/clients`) passes through `ApiKeyAuthFilter`. The filter hashes the `X-API-Key` header, looks it up in `api_client`, and writes a `CallerContext` (tenantId, appId) into the JAX-RS request context for downstream use.
+**Auth**: Every `/api/*` request (except `/api/clients`) passes through `JwtBearerAuthFilter`. The filter validates the `Authorization: Bearer <jwt>` header using an EC public key fetched from the auth-service JWKS endpoint, then writes a `CallerContext` (tenantId = userId, appId) into the JAX-RS request context for downstream use.
 
 ### Multi-Tenancy
 
@@ -68,8 +68,8 @@ Flyway manages schema in `src/main/resources/db/migration/`. Three migrations ex
 
 ### Auth Modes
 
-1. **Per-app keys** (production): Register a client via `POST /api/clients` with `X-Admin-Key`. Each client gets a unique 256-bit key stored as HMAC-SHA256 hash.
-2. **Dev-open mode**: If no `api_client` rows exist, the filter skips key validation and reads tenant/app from `X-Tenant-Id` / `X-App-Id` headers.
+1. **JWT bearer** (production): Callers present an ES256 JWT issued by the auth-service. `JwtBearerAuthFilter` validates the signature against the JWKS endpoint (`DOC_BUCKET_AUTH_JWKS_URL`). The `userId` claim becomes `tenantId`; the `appId` claim becomes `appId` in `CallerContext`.
+2. **Dev-open mode**: If no `Authorization` header is present, the filter allows the request through and reads tenant/app from `X-Tenant-Id` / `X-App-Id` headers.
 
 ### Rate Limiting
 
@@ -85,7 +85,8 @@ Key properties (set via `application.yml` or env vars):
 | `doc.storage.access-key-id` | `DOC_STORAGE_ACCESS_KEY_ID` | S3 credentials |
 | `doc.storage.secret-access-key` | `DOC_STORAGE_SECRET_ACCESS_KEY` | S3 credentials |
 | `doc.bucket.admin-key` | `DOC_BUCKET_ADMIN_KEY` | Admin API key for client registration |
-| `doc.bucket.key-hmac-secret` | `DOC_BUCKET_KEY_HMAC_SECRET` | HMAC secret (min 32 chars, required in prod) |
+| `doc.bucket.auth.jwks-url` | `DOC_BUCKET_AUTH_JWKS_URL` | Auth-service JWKS endpoint (required in prod) |
+| `doc.bucket.key-hmac-secret` | `DOC_BUCKET_KEY_HMAC_SECRET` | HMAC secret for admin key verification only |
 | `doc.bucket.upload.max-bytes` | — | Max upload size (default 100 MB) |
 | `doc.bucket.upload.mime-allowlist` | — | Comma-separated allowed MIME types (optional) |
 

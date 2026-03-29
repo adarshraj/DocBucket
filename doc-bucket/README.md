@@ -14,7 +14,7 @@
    - [Soft delete and hard delete](#soft-delete-and-hard-delete)
    - [Presigned URLs](#presigned-urls)
    - [Multi-tenancy](#multi-tenancy)
-   - [Authentication — per-app API keys](#authentication--per-app-api-keys)
+   - [Authentication — JWT bearer tokens](#authentication--jwt-bearer-tokens)
    - [Authentication — dev-open mode](#authentication--dev-open-mode)
    - [API client management](#api-client-management)
    - [Rate limiting](#rate-limiting)
@@ -47,12 +47,12 @@ DocBucket solves this by acting as the single gateway to storage. Applications a
 
 | Method | Path | Auth | Description |
 |--------|------|------|-------------|
-| `POST` | `/api/documents/upload` | API key | Upload document bytes |
-| `GET` | `/api/documents` | API key | List documents with pagination and filters |
-| `GET` | `/api/documents/{id}` | API key | Get document metadata |
-| `GET` | `/api/documents/{id}/content` | API key | Stream document bytes |
-| `GET` | `/api/documents/{id}/presign` | API key | Issue a time-limited presigned S3 URL |
-| `DELETE` | `/api/documents/{id}` | API key | Soft-delete (default) or hard-delete (`?hard=true`) |
+| `POST` | `/api/documents/upload` | Bearer JWT | Upload document bytes |
+| `GET` | `/api/documents` | Bearer JWT | List documents with pagination and filters |
+| `GET` | `/api/documents/{id}` | Bearer JWT | Get document metadata |
+| `GET` | `/api/documents/{id}/content` | Bearer JWT | Stream document bytes |
+| `GET` | `/api/documents/{id}/presign` | Bearer JWT | Issue a time-limited presigned S3 URL |
+| `DELETE` | `/api/documents/{id}` | Bearer JWT | Soft-delete (default) or hard-delete (`?hard=true`) |
 
 ### Client management (admin)
 
@@ -82,7 +82,7 @@ DocBucket solves this by acting as the single gateway to storage. Applications a
 ```
 POST /api/documents/upload
 Content-Type: application/pdf
-X-API-Key: <key>
+Authorization: Bearer <jwt>
 ?filename=contract.pdf
 
 <raw bytes>
@@ -125,14 +125,14 @@ Content-type is normalised to the base MIME type (e.g. `application/pdf`) before
 **Metadata only:**
 ```
 GET /api/documents/{id}
-X-API-Key: <key>
+Authorization: Bearer <jwt>
 ```
 Returns the same JSON shape as upload. Use `contentPath` to construct the stream URL.
 
 **Byte streaming:**
 ```
 GET /api/documents/{id}/content
-X-API-Key: <key>
+Authorization: Bearer <jwt>
 ```
 
 The service fetches the object from S3 and pipes it directly to the HTTP response. It sets `Content-Type`, `Content-Length`, `ETag`, and `Content-Disposition: attachment; filename="..."` so browsers and HTTP clients handle the file correctly without any additional configuration.
@@ -146,7 +146,7 @@ The service fetches the object from S3 and pipes it directly to the HTTP respons
 **Soft delete (default):**
 ```
 DELETE /api/documents/{id}
-X-API-Key: <key>
+Authorization: Bearer <jwt>
 ```
 Sets `deleted_at` on the metadata row and attempts to remove the object from S3. The row is retained so that:
 - The document ID can still be referenced without returning stale data to callers (all reads filter on `deleted_at IS NULL`).
@@ -158,7 +158,7 @@ Soft delete is idempotent — deleting an already-deleted document returns 204 w
 **Hard delete:**
 ```
 DELETE /api/documents/{id}?hard=true
-X-API-Key: <key>
+Authorization: Bearer <jwt>
 ```
 Removes the S3 object and the database row immediately. Used when you need instant removal and do not want to wait for the purge cycle, for example to comply with a right-to-erasure request.
 
@@ -168,7 +168,7 @@ Removes the S3 object and the database row immediately. Used when you need insta
 
 ```
 GET /api/documents/{id}/presign?ttl=3600
-X-API-Key: <key>
+Authorization: Bearer <jwt>
 ```
 
 Returns a time-limited URL that grants direct read access to the S3 object, bypassing the service entirely. The TTL must be between `doc.bucket.presign.min-ttl-seconds` (default 60 s) and `doc.bucket.presign.max-ttl-seconds` (default 7 days).
@@ -189,52 +189,47 @@ Tenant and app IDs are validated to match `[a-zA-Z0-9_-]+`. This prevents path t
 
 ---
 
-### Authentication — per-app API keys
+### Authentication — JWT bearer tokens
 
-Each application that needs to store documents is registered as an API client:
+DocBucket validates **ES256 JWTs issued by the auth-service**. There is no shared secret between the two services — the auth-service publishes its EC P-256 public key via a standard JWKS endpoint, and DocBucket fetches and caches it.
 
+Every request to `/api/documents/*` must carry:
 ```
-POST /api/clients
-X-Admin-Key: <admin-key>
-Content-Type: application/json
-
-{"tenantId": "acme", "appId": "billing", "label": "Billing service prod"}
+Authorization: Bearer <jwt>
 ```
 
-The response contains a `apiKey` field — a 256-bit (64 hex character) cryptographically random key. **This is the only time the raw key is returned.** Store it in your application's secret manager immediately.
+**JWT structure expected by DocBucket:**
 
-The application then authenticates every request with:
-```
-X-API-Key: <raw-key>
-```
+| Field | Required | Description |
+|-------|----------|-------------|
+| Header `alg` | Yes | Must be `ES256` |
+| Header `kid` | Yes | Key ID matching the auth-service JWKS entry |
+| Claim `userId` (or `sub`) | Yes | Becomes the `tenantId` in DocBucket — scopes all documents to this user |
+| Claim `appId` | Recommended | Scopes the document namespace to one application; empty string if omitted |
+| Claim `exp` | Yes | Token must not be expired |
 
-**Why per-app keys instead of a single shared key?**
+**How validation works:**
 
-- **Blast radius.** If one application's key is compromised, only that application is affected. You rotate that key without touching others.
-- **Isolation.** The key is bound to a specific `(tenantId, appId)` pair in the database. An application cannot forge headers to write into another tenant's namespace.
-- **Auditability.** Rate limiting and logs are per-key, so you can trace which application is responsible for activity.
+1. DocBucket fetches `GET <jwks-url>` on startup and caches each EC public key by its `kid`.
+2. On each request, the JWT header is parsed (without verification) to read `kid`.
+3. The cached public key for that `kid` is used to verify the ES256 signature with `nimbus-jose-jwt`.
+4. `exp` is checked. An expired token receives 401.
+5. If `kid` is not in cache (key rotation), DocBucket re-fetches the JWKS once and retries.
+6. On success, `userId` is written to the request context as `tenantId` and `appId` as `appId`. All subsequent document queries are scoped to this `(tenantId, appId)` pair.
 
-**How keys are stored:**
+**Why ES256 instead of HMAC?** With HMAC, any service that can verify a token can also forge one — the verification secret and the signing secret are the same. EC asymmetric signing separates these roles: only the auth-service holds the private key; DocBucket and any other service only hold the public key. A compromised DocBucket instance cannot impersonate the auth-service.
 
-The raw key is never stored. On registration, the service computes `HMAC-SHA256(rawKey, serverSecret)` and stores the 64-character hex result. On each request, the same computation is performed on the incoming header and compared to the stored hash using a constant-time equality check.
-
-HMAC-SHA256 is used instead of Argon2id/bcrypt because the keys have 256 bits of random entropy — brute force is computationally infeasible regardless of hash speed. The slow KDF cost would only add latency to every authenticated request with no security benefit. The HMAC server secret (distinct from the stored hash) means that even if the database is fully dumped, an attacker cannot verify guesses without also knowing the secret.
-
-**Key expiry:**
-
-Clients can be registered with an optional `expiresAt` timestamp. Requests using an expired key receive 401 with a message indicating expiry rather than a generic "invalid key" error, which helps diagnose configuration problems.
+**Token lifetime:** Tokens issued by the auth-service default to a 7-day TTL. DocBucket does not impose an additional maximum — `exp` is the sole expiry control. Tokens are not revocable before expiry; use short-lived tokens and re-issue via the auth-service when needed.
 
 ---
 
 ### Authentication — dev-open mode
 
-When no API clients are registered in the database, the authentication filter enters dev-open mode: no `X-API-Key` is required, and `X-Tenant-Id` / `X-App-Id` headers are read directly from the request.
+When a request arrives at `/api/documents/*` with no `Authorization` header, the filter enters dev-open mode: the request is allowed through unauthenticated and `X-Tenant-Id` / `X-App-Id` headers are read directly from the request.
 
-**Why this exists:** Running locally requires a working service before you have gone through the client registration flow. Dev-open mode makes the initial setup frictionless.
+**Why this exists:** Running locally without a live auth-service instance would otherwise require mocking JWTs for every request. Dev-open mode lets you hit the API with plain headers during development.
 
-**Why it is safe:** The service logs a `SECURITY: No API clients registered` warning at startup. In production profile, this is logged at ERROR level. The mode is not a configuration flag — it activates automatically only when the `api_client` table is empty, so deploying to production with clients registered eliminates it without any additional action.
-
-If a request arrives with an `X-API-Key` header, it is always validated against the database even in dev-open mode. This prevents the cache from masking a newly registered client and ensures directly-inserted rows are honoured immediately.
+**Why it is safe:** Dev-open mode activates only when the `Authorization` header is absent. Any request that does carry a `Bearer` token is always fully validated — there is no flag to globally disable auth. In production, all callers should be sending tokens from the auth-service, so dev-open mode is never reachable.
 
 ---
 
@@ -248,7 +243,7 @@ If a request arrives with an `X-API-Key` header, it is always validated against 
 
 **Revocation** (`DELETE /api/clients/{id}`) — removes the client. Subsequent requests using its key receive 401.
 
-All admin endpoints require an `X-Admin-Key` header matching the `DOC_BUCKET_ADMIN_KEY` environment variable. If that variable is not set, the admin API returns 501 (disabled). The admin key comparison uses the same HMAC constant-time verification as API keys to prevent timing-based attacks.
+All admin endpoints require an `X-Admin-Key` header matching the `DOC_BUCKET_ADMIN_KEY` environment variable. If that variable is not set, the admin API returns 501 (disabled). The admin key comparison uses HMAC-based constant-time equality to prevent timing-based attacks.
 
 **Why a separate admin key rather than a special API client?** Admin operations (register, rotate, revoke) must work even before any clients exist. Bootstrapping with a well-known env var avoids the chicken-and-egg problem of needing a client to create the first client.
 
@@ -256,9 +251,9 @@ All admin endpoints require an `X-Admin-Key` header matching the `DOC_BUCKET_ADM
 
 ### Rate limiting
 
-Authenticated requests are subject to a per-API-key fixed-window rate limit (default: 200 requests per minute). Requests that exceed the limit receive 429 with a `Retry-After: 60` header.
+Authenticated requests are subject to a per-user fixed-window rate limit (default: 200 requests per minute). The rate limit key is the `userId` claim from the JWT. Requests that exceed the limit receive 429 with a `Retry-After: 60` header.
 
-**Why per-key instead of global?** A global limit would punish well-behaved applications when a single misbehaving client spikes traffic. Per-key limits let each application hit its quota independently.
+**Why per-user instead of global?** A global limit would punish well-behaved users when a single caller spikes traffic. Per-user limits let each user hit their quota independently.
 
 **Current limitation:** Counters are in-memory, per JVM instance. With multiple service replicas, the effective limit is `requestsPerMinute × replicaCount`. For shared enforcement across replicas, replace `RateLimiter` with a Redis-backed counter or delegate to an API gateway (Traefik, Caddy, etc.).
 
@@ -345,7 +340,8 @@ Cross-origin requests are enabled for all origins by default (`origins: "*"`). T
 | `doc.storage.path-style-access` | `S3_PATH_STYLE` | `true` | Required for self-hosted S3 (Garage, MinIO) |
 | `doc.storage.default-bucket` | `DOC_BUCKET_BUCKET` | `documents` | Bucket name; must exist before startup |
 | `doc.bucket.admin-key` | `DOC_BUCKET_ADMIN_KEY` | — | Admin key for `/api/clients`; unset disables admin API |
-| `doc.bucket.key-hmac-secret` | `DOC_BUCKET_KEY_HMAC_SECRET` | dev default | HMAC-SHA256 secret for API key hashing; min 32 chars; **must be set in production** |
+| `doc.bucket.auth.jwks-url` | `DOC_BUCKET_AUTH_JWKS_URL` | `http://localhost:8703/.well-known/jwks.json` | JWKS endpoint of the auth-service; **must be set in production** |
+| `doc.bucket.key-hmac-secret` | `DOC_BUCKET_KEY_HMAC_SECRET` | dev default | HMAC secret used only for admin key verification (not request auth) |
 | `doc.bucket.upload.max-bytes` | `DOC_BUCKET_MAX_UPLOAD_BYTES` | `104857600` | Max upload size in bytes (100 MB) |
 | `doc.bucket.upload.mime-allowlist` | `DOC_BUCKET_UPLOAD_MIME_ALLOWLIST` | — | Comma-separated allowed MIME types; absent = all allowed |
 | `doc.bucket.rate-limit.enabled` | `DOC_BUCKET_RATE_LIMIT_ENABLED` | `true` | Enable per-key rate limiting |
@@ -376,7 +372,7 @@ cd doc-bucket
 
 The service starts with an embedded SQLite database (`./docbucket-dev.db` in the current directory). Flyway migrations run automatically on startup. The S3 server must be running separately with the bucket already created.
 
-On startup, the service logs a `SECURITY: No API clients registered` warning — this is expected in dev. The service runs in dev-open mode: no `X-API-Key` is required. Pass `X-Tenant-Id` and `X-App-Id` headers directly.
+The service starts in dev-open mode — no `Authorization` header is required. Pass `X-Tenant-Id` and `X-App-Id` headers directly to identify the tenant and app. To test with real JWT auth locally, point `DOC_BUCKET_AUTH_JWKS_URL` at a running auth-service instance.
 
 **Tests** use an in-memory SQLite database — no Docker or external services required:
 
@@ -427,14 +423,12 @@ DOC_STORAGE_SECRET_ACCESS_KEY=<secret>
 S3_ENDPOINT=http://your-garage-node:3900     # or your MinIO/R2 endpoint
 DOC_BUCKET_BUCKET=documents                  # bucket must exist before startup
 
-# Security — must be set; min 32 chars; rotate only with a full key re-registration
-DOC_BUCKET_KEY_HMAC_SECRET=<random-32+-char-string>
+# Auth-service JWKS endpoint — EC public keys are fetched from here at startup
+DOC_BUCKET_AUTH_JWKS_URL=http://auth-service:8703/.well-known/jwks.json
 
 # Admin API — omit to disable client management endpoints
 DOC_BUCKET_ADMIN_KEY=<random-string>
 ```
-
-**Changing `DOC_BUCKET_KEY_HMAC_SECRET`** invalidates every existing API key. All registered clients must receive new keys via the rotate endpoint before the secret is changed, or be re-registered afterwards.
 
 **Bucket setup:**
 Create the bucket and grant the storage key read/write access before starting the service. The service does not create buckets automatically. See `Garage-Setup-Guide.docx` in the repository root for a step-by-step Garage installation and bucket configuration guide.

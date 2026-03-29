@@ -11,13 +11,10 @@ import jakarta.ws.rs.ext.Provider
 import org.jboss.logging.Logger
 
 /**
- * Per-app key auth (preferred): rows in `api_client`; each app has its own secret;
- * `X-API-Key` is HMAC-SHA256 hashed and looked up; tenant/app come from the DB row.
- *
- * Dev-open mode: no client rows → no `X-API-Key` required; tenant/app from headers only.
- * This mode logs a warning and should never reach production.
+ * Replaced by [JwtBearerAuthFilter] — auth has moved to ES256 JWTs issued by auth-service.
+ * This class is retained only as a reference and is no longer registered as a JAX-RS provider.
  */
-@Provider
+// @Provider — disabled; superseded by JwtBearerAuthFilter
 @Priority(Priorities.AUTHENTICATION)
 class ApiKeyAuthFilter @Inject constructor(
     private val clientRepository: ApiClientRepository,

@@ -30,10 +30,13 @@ quarkus:
 doc:
   bucket:
     admin-key: ${DOC_BUCKET_ADMIN_KEY:}
-    # HMAC-SHA256 server secret for hashing API keys. Min 32 chars.
-    # MUST be overridden in production via DOC_BUCKET_KEY_HMAC_SECRET.
-    # Changing this value invalidates all existing registered client keys.
+    # HMAC-SHA256 server secret — still used for admin key verification in /api/clients.
+    # Not used for request auth (superseded by JWT); kept to avoid breaking admin endpoints.
     key-hmac-secret: ${DOC_BUCKET_KEY_HMAC_SECRET:dev-only-insecure-hmac-secret-change-in-prod}
+    auth:
+      # JWKS endpoint of the auth-service for fetching EC P-256 public keys.
+      # Keys are fetched at startup and refreshed on unknown kid (handles rotation).
+      jwks-url: ${DOC_BUCKET_AUTH_JWKS_URL:http://localhost:8703/.well-known/jwks.json}
     upload:
       max-bytes: ${DOC_BUCKET_MAX_UPLOAD_BYTES:104857600}          # 100 MB default
       # Optional MIME allowlist (comma-separated). Env: DOC_BUCKET_UPLOAD_MIME_ALLOWLIST
@@ -76,6 +79,8 @@ doc:
     bucket:
       key-hmac-secret: "test-hmac-secret-exactly-32-chars!!"
       admin-key: test-admin-plaintext
+      auth:
+        jwks-url: "http://localhost:0/.well-known/jwks.json"  # unused in tests — JwksCache is pre-loaded directly
       upload:
         max-bytes: 104857600
         mime-allowlist: application/octet-stream
