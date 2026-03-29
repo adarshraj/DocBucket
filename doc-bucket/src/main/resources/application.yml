@@ -2,8 +2,8 @@ quarkus:
   application:
     name: doc-bucket
   datasource:
-    # Default database: SQLite (embedded, zero operational overhead, no separate process).
-    # To switch to PostgreSQL: set QUARKUS_DATASOURCE_DB_KIND=postgresql,
+    # Default database: SQLite (embedded, zero operational overhead, no separate process). Works in production too.
+    # To use PostgreSQL instead: set QUARKUS_DATASOURCE_DB_KIND=postgresql,
     # QUARKUS_DATASOURCE_JDBC_URL, QUARKUS_DATASOURCE_USERNAME, QUARKUS_DATASOURCE_PASSWORD.
     # No rebuild required — both drivers are already on the classpath.
     db-kind: other
@@ -90,18 +90,10 @@ doc:
       secret-access-key: test
       path-style-access: true
 
-"%prod":
-  quarkus:
-    datasource:
-      # Switch to PostgreSQL in production.
-      # All other profiles use SQLite — no code or build changes needed to switch back.
-      db-kind: postgresql
-      jdbc:
-        driver: org.postgresql.Driver
-        url: ${QUARKUS_DATASOURCE_JDBC_URL}
-      username: ${QUARKUS_DATASOURCE_USERNAME:docbucket}
-      password: ${QUARKUS_DATASOURCE_PASSWORD}
-    hibernate-orm:
-      # PostgreSQL dialect is auto-detected by Quarkus when db-kind=postgresql;
-      # explicitly clear the SQLite dialect set in the default profile.
-      dialect: org.hibernate.dialect.PostgreSQLDialect
+# No %prod datasource override — SQLite works fine for personal use in production.
+# To use PostgreSQL in prod, set these env vars at runtime (no rebuild needed):
+#   QUARKUS_DATASOURCE_DB_KIND=postgresql
+#   QUARKUS_DATASOURCE_JDBC_URL=jdbc:postgresql://host:5432/docbucket
+#   QUARKUS_DATASOURCE_USERNAME=docbucket
+#   QUARKUS_DATASOURCE_PASSWORD=...
+#   QUARKUS_HIBERNATE_ORM_DIALECT=org.hibernate.dialect.PostgreSQLDialect

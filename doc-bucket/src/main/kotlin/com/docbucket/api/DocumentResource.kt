@@ -133,7 +133,7 @@ class DocumentResource @Inject constructor(
     @Operation(summary = "Issue a time-limited presigned S3 GET URL (direct download; ttl in seconds)")
     fun presign(
         @PathParam("id") id: UUID,
-        @QueryParam("ttl") @DefaultValue("300") ttlSeconds: Long,
+        @QueryParam("ttl") @DefaultValue("21600") ttlSeconds: Long,
         @Context requestContext: ContainerRequestContext,
     ): PresignResponse {
         return documentService.presignDownload(id, ttlSeconds, callerContext(requestContext))

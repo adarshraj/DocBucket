@@ -89,4 +89,4 @@ Key properties (set via `application.yml` or env vars):
 | `doc.bucket.upload.max-bytes` | — | Max upload size (default 100 MB) |
 | `doc.bucket.upload.mime-allowlist` | — | Comma-separated allowed MIME types (optional) |
 
-Quarkus Dev Services spins up PostgreSQL automatically in `%dev` and `%test` profiles — no local DB setup needed.
+SQLite is used in all profiles including production — no DB setup needed anywhere. PostgreSQL is supported but optional: set `QUARKUS_DATASOURCE_DB_KIND=postgresql` and the related env vars at runtime if you ever need it.
