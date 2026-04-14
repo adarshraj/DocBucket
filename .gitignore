@@ -1,2 +1,7 @@
 /.claude
 /.vscode
+# Dev databases
+*.db
+
+# Build output
+target/
